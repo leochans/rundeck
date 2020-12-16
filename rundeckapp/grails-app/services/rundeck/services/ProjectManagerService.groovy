@@ -19,6 +19,7 @@ package rundeck.services
 
 import com.codahale.metrics.MetricRegistry
 import com.dtolabs.rundeck.core.authorization.AclsUtil
+import com.dtolabs.rundeck.core.authorization.AuthContext
 import com.dtolabs.rundeck.core.authorization.Authorization
 import com.dtolabs.rundeck.core.authorization.AuthorizationUtil
 import com.dtolabs.rundeck.core.authorization.ValidationSet
@@ -35,6 +36,7 @@ import com.dtolabs.rundeck.core.storage.StorageConverterPluginAdapter
 import com.dtolabs.rundeck.core.storage.StorageTimestamperConverter
 import com.dtolabs.rundeck.core.storage.StorageTree
 import com.dtolabs.rundeck.core.storage.StorageUtil
+import com.dtolabs.rundeck.core.storage.keys.KeyStorageTree
 import com.dtolabs.rundeck.core.storage.projects.ProjectStorageTree
 import com.dtolabs.rundeck.core.utils.IPropertyLookup
 import com.dtolabs.rundeck.core.utils.PropertyLookup
@@ -88,6 +90,11 @@ class ProjectManagerService implements ProjectManager, ApplicationContextAware, 
     def metricService
     def rundeckNodeService
     FeatureService featureService
+    private StorageService storageService
+
+    String accessUsername
+    String accessRole
+
     /**
      * Scheduled executor for retries
      */
@@ -106,6 +113,25 @@ class ProjectManagerService implements ProjectManager, ApplicationContextAware, 
     public void setStorage(StorageTree tree){
         rundeckConfigStorageTree=tree
     }
+
+
+    private StorageService getStorageService(){
+        if (null == storageService) {
+            storageService = applicationContext.getBean("storageService", StorageService)
+        }
+        return storageService
+    }
+
+    KeyStorageTree getDefaultAuthorizingProjectServices(String project){
+        AuthContext authContext = frameworkService.getAuthContextForUserAndRolesAndProject(
+                accessUsername,
+                [accessRole],
+                project
+        )
+
+        return getStorageService().storageTreeWithContext(authContext)
+    }
+
 
     /**
      * Provides subtree access for the project without authorization
@@ -155,6 +181,7 @@ class ProjectManagerService implements ProjectManager, ApplicationContextAware, 
         new RundeckSpiBaseServicesProvider(
             services: [
                 (ProjectStorageTree): nonAuthorizingProjectStorageTreeSubpath(project, subpath),
+                (KeyStorageTree): getDefaultAuthorizingProjectServices(project),
             ]
         )
     }
@@ -231,6 +258,10 @@ class ProjectManagerService implements ProjectManager, ApplicationContextAware, 
         def spec = configurationService?.getCacheSpecFor("projectManagerService", "projectCache", DEFAULT_PROJECT_CACHE_SPEC)?:DEFAULT_PROJECT_CACHE_SPEC
 
         log.debug("projectCache: creating from spec: ${spec}")
+
+        accessUsername = configurationService?.getString("resourcemodel.access.username","system")
+        accessRole = configurationService?.getString("resourcemodel.access.role","system")
+
 
         projectCache = CacheBuilder.from(spec)
                                    .recordStats()
